@@ -1,0 +1,67 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>AI 每日摘要</title>
+<link rel="stylesheet" href="/static/css.css">
+</head>
+<body>
+<div class="app">
+  <header class="top">
+    <div class="brand">
+      <span class="logo">📰</span>
+      <div>
+        <h1>AI 每日摘要</h1>
+        <div class="sub">14 源 · arXiv 模型  ·  Agent/MCP 框架  ·  新闻</div>
+      </div>
+    </div>
+    <div class="stats">
+      <span id="statDays" class="stat-badge">—</span>
+      <span id="statTotal" class="stat-badge">—</span>
+    </div>
+    <div class="mode-wrap">
+      <span class="mode-label" id="modeLabel">窗口</span>
+      <button id="modeFocus" class="mode-btn" title="短窗口: 近3天, 每日聚焦">短</button>
+      <button id="modeBackfill" class="mode-btn active" title="长窗口: 近14天, 确保无遗漏">长</button>
+    </div>
+    <button id="btnRefresh" class="btn-refresh" title="抓取最新数据">
+      <span class="icon">↻</span> 刷新数据
+    </button>
+  </header>
+
+  <main>
+    <aside class="sidebar">
+      <div class="panel">
+        <div class="cat-head">
+          <h2 class="panel-title">类别</h2>
+          <label class="count-mode">
+            <input type="checkbox" id="catTotalMode" title="类别计数按全库总量显示">
+            <span>按总量</span>
+          </label>
+        </div>
+        <div class="cat-list" id="catList"></div>
+        <div class="hint">点击类别可筛选 · 默认计数按当天，勾选"按总量"用全库总数</div>
+      </div>
+    </aside>
+
+    <section class="content">
+      <nav class="day-nav">
+        <span class="day-count">—</span>
+        <div class="day-scroll" id="dayNav"></div>
+      </nav>
+      <div class="empty" id="emptyState" style="display:none;">
+        暂无数据 · 点击右上角 <b>刷新数据</b>
+      </div>
+      <div class="day-bar" id="dayBar" style="display:none;"></div>
+      <div class="paper-list" id="paperList"></div>
+    </section>
+  </main>
+
+  <footer>
+    <span>数据来源: arXiv 模型  ·  14 源(官方/新闻/RSS/WordPress/GitHub Atom/HF 正文)  ·  抓取源可在 <code>backend.py</code> 的 <code>NON_ARXIV_SOURCES</code> 配置  ·  窗口: <code>短</code>近3天聚焦 / <code>长</code>近14天补完</span>
+  </footer>
+</div>
+<script src="/static/app.js"></script>
+</body>
+</html>
