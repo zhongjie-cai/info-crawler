@@ -6,7 +6,8 @@
   category, category_label, pubDate, source), day 为 YYYY-MM-DD。
 - 同一天覆盖更新: 抓取时按 day 先删后插, 保证同一 day 的快照总是最新一次
   抓取结果, 不累积历史。
-- 源: arXiv RSS + 官方/新闻 RSS + WordPress WP API + GitHub Atom + HuggingFace HTML。
+- 源: arXiv RSS + 官方/新闻 RSS + WordPress WP API + GitHub Atom +
+      HuggingFace HTML + InfoQ RSS + GitHub Trending HTML。
   全部用纯 stdlib 解析, 无鉴权, 应用独立可运行。 类别可配置。
 
 数据库: 本地 SQLite, 文件 db/papers.db, 同一天 = 一个 day 分区, 覆盖更新。
@@ -68,7 +69,7 @@ ARXIV_CATEGORIES = {
 
 # 非 arXiv 源的类别: 标签 -> 源配置
 #   category_label: 显示给用户的类别名
-#   type: "rss" | "wp_json" | "atom" | "html"
+#   type: "rss" | "wp_json" | "atom" | "html" | "html_trending"
 #   url: 源地址
 #   date_field: 日期解析类型
 #   (标题/链接/摘要/日期 的字段名按 type 自动解析)
@@ -109,6 +110,14 @@ NON_ARXIV_SOURCES = {
     "MCP 工具链": {
         "type": "atom",
         "url": "https://github.com/modelcontextprotocol/modelcontextprotocol/commits.atom",
+    },
+    "InfoQ 开源技术": {
+        "type": "rss",
+        "url": "https://www.infoq.cn/feed/",
+    },
+    "开源(GitHub Trending)": {
+        "type": "html_trending",
+        "url": "https://github.com/trending",
     },
 }
 
@@ -404,6 +413,57 @@ def fetch_huggingface(limit: int = 10) -> list[dict]:
     return out
 
 
+def fetch_github_trending(limit: int = 15) -> list[dict]:
+    """GitHub Trending, 解析 HTML 页。卡片在 <article class=\"Box-row\">。
+    每项有 repo 名(在 h2, 格式 owner / repo)、描述(在 <p>)、star 数。
+    无真实 pubDate, 用今天日期(趋势是当日快照)。失败返回 []。"""
+    data = _fetch("https://github.com/trending", timeout=25)
+    if not data:
+        return []
+    out = []
+    # 每个趋势项目: <article class="Box-row"> ... </article>
+    for art in re.findall(r'<article class="Box-row">.*?</article>', data, re.DOTALL):
+        if not art:
+            continue
+        # repo 名: 在 h2, 格式 "owner / repo"
+        name_m = re.search(r'<h2[^>]*>(.*?)</h2>', art, re.DOTALL)
+        if not name_m:
+            continue
+        txt = re.sub(r'<[^>]+>', ' ', name_m.group(1)).strip().replace('\n', '')
+        repo_m = re.search(r'^([\w.-]+)\s*/\s*([\w-]+)', txt)
+        if not repo_m:
+            continue
+        owner, repo = repo_m.group(1), repo_m.group(2)
+        repo_name = f"{owner}/{repo}"
+        url = f"https://github.com/{repo_name}"
+        # 描述: 卡片内 <p> 的文本, 去掉 star 和 repo 名
+        p_m = re.search(r'<p[^>]*>(.*?)</p>', art, re.DOTALL)
+        desc = ""
+        if p_m:
+            desc = re.sub(r'<[^>]+>', ' ', p_m.group(1))
+            desc = desc.replace(repo_name, '').replace('Star', '').strip()
+        # star 数
+        star_m = re.search(r'(\d[\d,]*)\s*(?:star|Star)\b', art)
+        star = star_m.group(1) if star_m else ""
+        # 摘要: 描述 + star
+        summary = f"{desc} (★{star})" if desc else (f"(★{star})" if star else "")
+        today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+        out.append({
+            "unique_id": repo_name,
+            "title": repo_name,
+            "summary": summary,
+            "url": url,
+            "category": "开源(GitHub Trending)",
+            "category_label": "开源(GitHub Trending)",
+            "pubDate": today,
+            "day": today,
+            "source": "GitHub Trending",
+        })
+        if len(out) >= limit:
+            break
+    return out
+
+
 def _atom_fetch(label: str, url: str, limit: int = 15) -> list[dict]:
     """通用 GitHub Atom 源。元素带 Atom namespace, 日期在 <updated> 文本(ISO)。"""
     data = _fetch(url, timeout=20)
@@ -490,6 +550,8 @@ def fetch_all(min_days: int = 3, mode: str = "backfill", limit: int = 200) -> di
             res = _atom_fetch(label, cfg["url"])
         elif t == "html":
             res = fetch_huggingface()
+        elif t == "html_trending":
+            res = fetch_github_trending()
         else:
             res = []
         errors[label] = len(res)

@@ -1,6 +1,6 @@
 # info-crawler
 
-AI 领域每日信息摘要工具。核心是 `ai-daily-app/` —— 一个**纯 Python 标准库**（`urllib` + `http.server` + `sqlite3`）实现的本地 Web 应用，无需第三方依赖、无需 `npm`、无需 Flask。它从 14 个 AI 相关源抓取每日信息，按天独立存储到 SQLite 数据库，并提供可筛选的网页界面。
+AI 领域每日信息摘要工具。核心是 `ai-daily-app/` —— 一个**纯 Python 标准库**（`urllib` + `http.server` + `sqlite3`）实现的本地 Web 应用，无需第三方依赖、无需 `npm`、无需 Flask。它从 16 个 AI 相关源抓取每日信息，按天独立存储到 SQLite 数据库，并提供可筛选的网页界面。
 
 > 说明：本仓库同时包含 `ai_digest/`（早期版）与 `ai-daily-app/`（当前主应用）。本 README 主要针对 **`ai-daily-app/`**。
 
@@ -12,7 +12,7 @@ AI 领域每日信息摘要工具。核心是 `ai-daily-app/` —— 一个**纯
 info-crawler/
 ├── ai-daily-app/          # 当前主应用
 │   ├── server.py          # Web 服务器（HTTP API + 静态文件）
-│   ├── backend.py         # 数据层 + 14 个源抓取逻辑
+│   ├── backend.py         # 数据层 + 16 个源抓取逻辑
 │   ├── web/
 │   │   ├── index.html     # 前端页面
 │   │   ├── css.css        # 样式（暗色主题）
@@ -28,7 +28,7 @@ info-crawler/
 
 ---
 
-## 数据源（14 个）
+## 数据源（16 个）
 
 抓取源在 `backend.py` 的 `ARXIV_CATEGORIES` 与 `NON_ARXIV_SOURCES` 配置。
 
@@ -41,7 +41,7 @@ info-crawler/
 | cs.SE | 软件工程（AI 研发 / 编码） |
 | cs.CR | 安全 |
 
-### 非 arXiv 源（9 个）
+### 非 arXiv 源（11 个）
 | 类别 | 源 | 类型 | 来源 URL |
 |---|---|---|---|
 | OpenAI 官方 | OpenAI | RSS | `openai.com/news/rss.xml` |
@@ -53,8 +53,10 @@ info-crawler/
 | Agent 框架 (LangChain) | LangChain | GitHub Atom | `langchain-ai/langchain/releases.atom` |
 | Agent 框架 (LangGraph) | LangGraph | GitHub Atom | `langchain-ai/langgraph/releases.atom` |
 | MCP 工具链 | MCP | GitHub Atom | `modelcontextprotocol/modelcontextprotocol/commits.atom` |
+| InfoQ 开源技术 | InfoQ 中文 | RSS | `infoq.cn/feed/` |
+| 开源(GitHub Trending) | GitHub Trending | HTML | `github.com/trending` |
 
-> 各源抓取失败时**优雅跳过**，不影响整体。数据库已入库：15 个 day（2026-10-12 ~ 2026-10-26），共 662 条。
+> 各源抓取失败时**优雅跳过**，不影响整体。源可配置于 `backend.py`。数据入库条数随抓取时点变化（当前已含 InfoQ 与 GitHub Trending）。
 
 ---
 
@@ -169,12 +171,13 @@ curl -X POST "http://127.0.0.1:8787/api/refresh?mode=backfill"
    ```python
    {
        "label": "显示名",
-       "type": "rss" | "wp_json" | "atom" | "html",
+       "type": "rss" | "wp_json" | "atom" | "html" | "html_trending",
        "url": "源 URL",
        # html 类型: HuggingFace 需抓详情页取正文
+       # html_trending: GitHub Trending 式 HTML(无独立解析器, 用 fetch_github_trending)
    }
    ```
-3. 不同 `type` 用对应解析器（`_rss_fetch` / `fetch_techcrunch` / `_atom_fetch` / `fetch_huggingface`）。
+3. 不同 `type` 用对应解析器（`_rss_fetch` / `fetch_techcrunch` / `_atom_fetch` / `fetch_huggingface` / `fetch_github_trending`）。
 4. 修改后重启 `server.py` 并点"刷新数据"验证。
 
 ### 窗口 / 天数调参
