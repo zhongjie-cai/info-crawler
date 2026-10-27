@@ -48,7 +48,6 @@ function relTime(ts) {
 // ---------- 渲染 ----------
 function renderStats() {
   el("statDays").textContent = state.days.length + " 天";
-  el("statTotal").textContent = state.papers.length + " 篇";
   const catEl = el("catCount");
   if (catEl) catEl.textContent = state.categories.length + " 类别";
 }
@@ -58,9 +57,9 @@ function renderDayNav() {
   const cntEl = document.querySelector(".day-count"); // .day-count 是 class, 用 querySelector
   if (cntEl) cntEl.textContent = state.days.length + " 个日期";
   wrap.innerHTML = "";
-  // 计数用 dayNavCounts(筛选后); 无筛选时 = 总数
+  // 日期倒序显示: 最新日期在最左边(state.days 已倒序)
   const nMap = state.dayNavCounts || {};
-  state.days.slice().reverse().forEach(d => {
+  state.days.slice().forEach(d => {
     const n = nMap[d] != null ? nMap[d] : (state.paperCounts || {})[d] || 0;
     const chip = document.createElement("div");
     chip.className = "day-chip" + (d === state.activeDay ? " active" : "");
@@ -73,35 +72,28 @@ function renderDayNav() {
 function renderCatList() {
   const wrap = el("catList");
   wrap.innerHTML = "";
-  // 两种计数逻辑, 由 checkbox 控制
-  let allCount, catCounts;
+  // 始终显示全库所有类别(state.categories), 切换日期后不会缺类别。
+  // 计数: 按总量用全库 count; 按当天用当天(state.papers)该类别条数。
+  const cats = state.categories || [];
+  let allCount;
+  let catList = [];
   if (state.catTotalMode) {
-    // 按总量: 全库(所有 day)的类别聚合
-    const cats = state.categories || [];
+    // 按总量: 全库
     allCount = cats.reduce((a, c) => a + (c.count || 0), 0);
-    catCounts = cats.map(c => ({ label: c.label, count: c.count }));
+    catList = cats.map(c => ({ label: c.label, count: c.count }));
   } else {
-    // 按当天: 当前选中那天的论文, 按类别统计
-    const dayPapers = state.papers || [];
-    allCount = dayPapers.length;
+    // 按当天: 全库类别, count 用当天(state.papers)统计, 没数据的类别为0
+    allCount = (state.papers || []).length;
     const map = {};
-    dayPapers.forEach(p => { map[p.category_label] = (map[p.category_label] || 0) + 1; });
-    const cats = state.categories || [];
-    // 只显示今天真正出现的类别(按计数倒序)
-    catCounts = cats
-      .filter(c => (map[c.label] || 0) > 0)
-      .map(c => ({ label: c.label, count: map[c.label] }))
-      .sort((a, b) => b.count - a.count);
-    // 补充: 若 today 有类别但不在 categories 聚合里(极少), 兜底加入
-    Object.keys(map).forEach(lbl => {
-      if (!catCounts.some(c => c.label === lbl)) catCounts.push({ label: lbl, count: map[lbl] });
-    });
+    (state.papers || []).forEach(p => { map[p.category_label] = (map[p.category_label] || 0) + 1; });
+    catList = cats.map(c => ({ label: c.label, count: map[c.label] || 0 }))
+                  .sort((a, b) => b.count - a.count);
   }
   const all = { label: "全部", count: allCount };
   let node = makeCatNode(all.label, all.count, state.filterCat === null);
   node.onclick = () => { state.filterCat = null; applyFilter(); };
   wrap.appendChild(node);
-  catCounts.forEach(c => {
+  catList.forEach(c => {
     const node = makeCatNode(c.label, c.count, state.filterCat === c.label);
     node.onclick = () => { state.filterCat = c.label; applyFilter(); };
     wrap.appendChild(node);
@@ -126,9 +118,15 @@ async function applyFilter() {
   }
   renderDayNav();            // 日期条计数更新
   renderPapers();            // 论文列表更新(已按 filterCat 筛选)
-  // 顶部"X 篇"
-  const cntEl = el("statTotal");
-  if (cntEl) cntEl.textContent = (state.filterCat ? 0 : state.papers.length) + " 篇";
+  // 筛选后更新 dayBar 计数, 与列表一致
+  const db = el("dayBar");
+  if (db && db.style.display !== "none") {
+    const n = state.filterCat
+      ? state.papers.filter(p => p.category_label === state.filterCat).length
+      : state.papers.length;
+    db.querySelector(".cnt").textContent =
+      n + " 篇" + (state.filterCat ? "「" + state.filterCat + "」" : "");
+  }
 }
 
 function makeCatNode(label, count, active) {
@@ -144,17 +142,6 @@ function renderPapers() {
   let rows = state.filterCat
     ? state.papers.filter(p => p.category_label === state.filterCat)
     : state.papers;
-  // 顶部"X 篇" + dayBar 计数都按筛选后的 rows, 与内容一致
-  const cntEl = el("statTotal");
-  if (cntEl) cntEl.textContent = rows.length + " 篇";
-  const db = el("dayBar");
-  if (db && db.style.display !== "none") {
-    db.innerHTML = `
-      <span class="date">${fmtDate(state.activeDay)}</span>
-      <span class="cnt">${rows.length} 篇${state.filterCat ? "「" + state.filterCat + "」" : ""}</span>
-      <span class="time">按发表日期倒序</span>
-    `;
-  }
   if (rows.length === 0) {
     wrap.innerHTML = "";
     empty.style.display = "block";
@@ -206,16 +193,21 @@ async function loadAll() {
     const r = await fetch(`${API}/days/${d}`).then(r2 => r2.json());
     state.paperCounts[d] = r.count || 0;
   }
-  renderStats();
-  renderCatList();
-  renderDayNav();
   if (state.days.length === 0) {
+    renderStats();
+    renderCatList();
+    renderDayNav();
     renderPapers();
     toast("暂无数据，点 刷新数据 抓取", "err");
     return;
   }
+  // 先加载最新一天, 再渲染类别列表(此时 state.papers 已就位, 计数正确)
   state.activeDay = state.days[0];
-  loadDay(state.activeDay);
+  await loadDay(state.activeDay);
+  // loadDay 里已 renderCatList? 否, 这里统一渲染
+  renderCatList();
+  renderPapers();
+  toast(`已加载 ${state.activeDay}，${state.papers.length} 篇`, "ok");
 }
 
 async function loadDay(day) {
@@ -224,12 +216,13 @@ async function loadDay(day) {
   state.papers = r.papers || [];
   renderStats();
   renderDayNav();
+  renderCatList();   // 计数按当天(state.papers)刷新, 切日期后类别不会缺
   renderPapers();
   el("dayBar").style.display = "flex";
   el("dayBar").innerHTML = `
     <span class="date">${fmtDate(day)}</span>
-    <span class="cnt">${state.papers.length} 篇论文</span>
-    <span class="time">arXiv 按发表日期倒序</span>
+    <span class="cnt">${state.papers.length} 篇</span>
+    <span class="time">按发表日期倒序</span>
   `;
 }
 

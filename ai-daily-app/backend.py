@@ -16,6 +16,7 @@ from __future__ import annotations
 import os, re, sqlite3, xml.etree.ElementTree as ET
 import urllib.request, urllib.error, json
 import email.utils
+import html
 from datetime import datetime, timezone, timedelta
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
@@ -58,6 +59,42 @@ def _get_hf_abstract(url: str) -> str:
     text = re.sub(r"\s+", " ", " ".join(body[:2]))
     return text[:280] + "…" if len(text) > 280 else text
 
+def _get_infoq_abstract(url: str) -> str:
+    """从 InfoQ 文章页提取摘要: 优先 meta description / og:description,
+    其次正文首段。RSS 描述只是'点击查看原文', 需抓详情页。
+    失败(超时/SSL)返回 ''(不抛)。"""
+    data = ""
+    for _ in range(2):  # 重试 2 次, 偶发 SSL EOF
+        try:
+            req = urllib.request.Request(url, headers=UA)
+            with urllib.request.urlopen(req, timeout=30) as r:
+                data = r.read().decode("utf-8", "ignore")
+            break
+        except Exception:
+            continue
+    if not data or "<html" not in data.lower():
+        return ""
+    # 1) meta description
+    m = re.search(r'meta name="description" content="(.*?)"\s*/??>', data, re.I)
+    if m:
+        txt = html.unescape(m.group(1))
+        if len(txt) > 20:
+            return _short_summary(txt)
+    # 2) og:description
+    m = re.search(r'property="og:description" content="(.*?)"\s*/??>', data, re.I)
+    if m:
+        txt = html.unescape(m.group(1))
+        if len(txt) > 20:
+            return _short_summary(txt)
+    # 3) 正文首段(<p> 或 <section>)
+    m = re.search(r'(<p[^>]*>.*?</p>|<section[^>]*>.*?</section>)', data, re.I | re.S)
+    if m:
+        txt = re.sub(r'<[^>]+>', ' ', m.group(0))
+        txt = html.unescape(re.sub(r'\s+', ' ', txt).strip())
+        if len(txt) > 30:
+            return _short_summary(txt)
+    return ""
+
 # 每个类别有: label(显示名), fetch 函数签名
 ARXIV_CATEGORIES = {
     "cs.CL":  "计算与语言(自然语言/LLM)",
@@ -69,7 +106,7 @@ ARXIV_CATEGORIES = {
 
 # 非 arXiv 源的类别: 标签 -> 源配置
 #   category_label: 显示给用户的类别名
-#   type: "rss" | "wp_json" | "atom" | "html" | "html_trending"
+#   type: "rss" | "wp_json" | "atom" | "html" | "html_trending" | "infoq"
 #   url: 源地址
 #   date_field: 日期解析类型
 #   (标题/链接/摘要/日期 的字段名按 type 自动解析)
@@ -112,7 +149,7 @@ NON_ARXIV_SOURCES = {
         "url": "https://github.com/modelcontextprotocol/modelcontextprotocol/commits.atom",
     },
     "InfoQ 开源技术": {
-        "type": "rss",
+        "type": "infoq",
         "url": "https://www.infoq.cn/feed/",
     },
     "开源(GitHub Trending)": {
@@ -464,6 +501,43 @@ def fetch_github_trending(limit: int = 15) -> list[dict]:
     return out
 
 
+def fetch_infoq(limit: int = 20) -> list[dict]:
+    """InfoQ 开源技术, 解析 RSS + 抓文章页取真实摘要。
+    RSS 描述只是'点击查看原文', 摘要从文章页的 meta/og description 抓。
+    失败返回 [](不抛)。"""
+    data = _fetch("https://www.infoq.cn/feed/", timeout=20)
+    if not data:
+        return []
+    items = _rss_items(data)
+    out = []
+    for it in items:
+        title = it.get("title", "")
+        link = it.get("link", "")
+        if not title or not link:
+            continue
+        # 清理 link 去掉 utm 跟踪参数
+        link = re.sub(r"\?utm_source=.*", "", link).strip()
+        day = _parse_date(it.get("pubDate", ""))
+        if not day:
+            continue
+        # 抓文章页真实摘要
+        abstract = _get_infoq_abstract(link)
+        out.append({
+            "unique_id": link,
+            "title": title,
+            "summary": abstract,  # 抓不到则为空, 前端显示"无摘要"
+            "url": link,
+            "category": "InfoQ 开源技术",
+            "category_label": "InfoQ 开源技术",
+            "pubDate": it.get("pubDate", ""),
+            "day": day,
+            "source": "InfoQ",
+        })
+        if len(out) >= limit:
+            break
+    return out
+
+
 def _atom_fetch(label: str, url: str, limit: int = 15) -> list[dict]:
     """通用 GitHub Atom 源。元素带 Atom namespace, 日期在 <updated> 文本(ISO)。"""
     data = _fetch(url, timeout=20)
@@ -552,6 +626,8 @@ def fetch_all(min_days: int = 3, mode: str = "backfill", limit: int = 200) -> di
             res = fetch_huggingface()
         elif t == "html_trending":
             res = fetch_github_trending()
+        elif t == "infoq":
+            res = fetch_infoq()
         else:
             res = []
         errors[label] = len(res)

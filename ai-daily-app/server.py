@@ -57,8 +57,21 @@ def _send_file(res, code, path, ctype="text/html; charset=utf-8"):
 
 
 class AppServer(http.server.BaseHTTPRequestHandler):
+    # 关闭 keep-alive: HTTP/1.0 每次响应后关连接,
+    # 避免浏览器长连接卡在 handle_one_request 的 readline,
+    # 使 Ctrl+C 可快速干净退出
+    protocol_version = "HTTP/1.0"
+
     def log_message(self, fmt, *args):
         pass  # 降噪
+
+    def setup(self):
+        super().setup()
+        # 连接超时: readline 不再无限卡, 慢/残缺连接快速回收
+        try:
+            self.connection.settimeout(10)
+        except Exception:
+            pass
 
     def do_HEAD(self):
         self.send_response(200)
@@ -152,8 +165,17 @@ def main():
     print(f"  数据: {B.DB_PATH}")
     print(f"  源:  {list(B.ARXIV_CATEGORIES)}")
     socketserver.TCPServer.allow_reuse_address = True
-    with socketserver.TCPServer((HOST, PORT), AppServer) as srv:
+    srv = socketserver.TCPServer((HOST, PORT), AppServer)
+    try:
         srv.serve_forever()
+    except KeyboardInterrupt:
+        print("\n收到 Ctrl+C, 正在关闭…")
+        try:
+            srv.shutdown()   # 停止接受新连接
+            srv.server_close()  # 关闭监听 socket
+        except Exception:
+            pass
+        print("已关闭")
 
 
 if __name__ == "__main__":

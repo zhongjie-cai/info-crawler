@@ -108,6 +108,7 @@ AI_DAILY_PORT=8787 python3 server.py
 ### 摘要
 - arXiv / RSS 源：自带摘要。
 - HuggingFace：列表页无独立摘要，应用自动抓**详情页正文前几段**作为摘要。
+- InfoQ 开源技术：RSS 描述只是"点击查看原文"，应用自动抓**文章页的 meta/og 描述**作为真实摘要；抓不到则显示"无摘要"。
 - GitHub Atom 源（vLLM 等）：无正文摘要（`summary` 为空），展示版本标题。
 
 ### 数据覆盖
