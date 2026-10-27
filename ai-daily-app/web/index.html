@@ -52,7 +52,14 @@
       <div class="empty" id="emptyState" style="display:none;">
         暂无数据 · 点击右上角 <b>刷新数据</b>
       </div>
-      <div class="day-bar" id="dayBar" style="display:none;"></div>
+      <div class="day-bar" id="dayBar" style="display:none;">
+        <div class="day-bar-main" id="dayBarMain"></div>
+        <div class="kw-filter" id="kwFilter">
+          <input type="text" id="kwInput"
+                 placeholder="输入关键字 回车添加 · 多个关键字都满足才显示">
+          <span class="kw-labels" id="kwLabels"></span>
+        </div>
+      </div>
       <div class="paper-list" id="paperList"></div>
     </section>
   </main>

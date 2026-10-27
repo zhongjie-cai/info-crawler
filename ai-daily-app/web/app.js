@@ -15,6 +15,7 @@ let state = {
   dayNavCounts: {},  // 日期条要显示的计数: 无筛选=总数, 有筛选=筛选后
   mode: "backfill",  // focus=短窗口(近3天), backfill=长窗口(近14天)
   catTotalMode: false, // 类别计数按全库总量显示; false=按当天(默认)
+  keyword: [],      // dayBar 关键字数组(AND 过滤: 任一关键字在 标题/摘要/类别 中出现即可)
 };
 
 // ---------- 工具 ----------
@@ -119,14 +120,7 @@ async function applyFilter() {
   renderDayNav();            // 日期条计数更新
   renderPapers();            // 论文列表更新(已按 filterCat 筛选)
   // 筛选后更新 dayBar 计数, 与列表一致
-  const db = el("dayBar");
-  if (db && db.style.display !== "none") {
-    const n = state.filterCat
-      ? state.papers.filter(p => p.category_label === state.filterCat).length
-      : state.papers.length;
-    db.querySelector(".cnt").textContent =
-      n + " 篇" + (state.filterCat ? "「" + state.filterCat + "」" : "");
-  }
+  updateDayBar();
 }
 
 function makeCatNode(label, count, active) {
@@ -136,18 +130,107 @@ function makeCatNode(label, count, active) {
   return d;
 }
 
+// ---------- dayBar 关键字过滤 ----------
+// 判断一条 paper 是否匹配所有关键字(AND):
+// 每个关键字必须都在 (标题 标题+摘要 类别) 中至少一处出现。
+// 空关键字忽略。
+function paperMatches(p) {
+  if (!state.keyword.length) return true;
+  const hay = ((p.title || "") + " " + (p.summary || "") + " " +
+               (p.category_label || "") + " " + (p.source || ""))
+              .toLowerCase();
+  return state.keyword.every(k => hay.includes(k.toLowerCase()));
+}
+
+// 把某 day 下匹配关键字的论文数, 用于 dayBar 计数(客户端算, 无需新 API)
+function dayPaperCount(day, papers) {
+  return papers.filter(p => p.day === day && paperMatches(p)).length;
+}
+
+function renderKwLabels() {
+  const wrap = el("kwLabels");
+  if (!wrap) return;
+  wrap.innerHTML = "";
+  state.keyword.forEach((kw, i) => {
+    const lab = document.createElement("span");
+    lab.className = "kw-label";
+    lab.innerHTML = `<b>${esc(kw)}</b><span class="x">×</span>`;
+    lab.onclick = () => {
+      state.keyword.splice(i, 1);
+      renderKwLabels();
+      updateDayBar();
+      renderPapers();
+      toast(`已移除关键字「${kw}」`, "ok");
+    };
+    wrap.appendChild(lab);
+  });
+}
+
+// 添加关键字(回车)
+function addKeyword() {
+  const inp = el("kwInput");
+  if (!inp) return;
+  const v = (inp.value || "").trim();
+  if (!v) return;
+  // 去重(大小写不敏感)
+  const exists = state.keyword.some(k => k.toLowerCase() === v.toLowerCase());
+  if (exists) { toast("关键字「" + v + "」已存在", "ok"); return; }
+  state.keyword.push(v);
+  inp.value = "";
+  renderKwLabels();
+  updateDayBar();
+  renderPapers();
+  toast(`已添加关键字「${v}」· 共 ${state.keyword.length} 个`, "ok");
+}
+
+// 清空全部关键字
+function clearKeywords() {
+  state.keyword = [];
+  renderKwLabels();
+  updateDayBar();
+  renderPapers();
+  toast("已清空全部关键字", "ok");
+}
+
+// 重新计算 dayBar 的计数(类别 + 关键字 双重过滤, 仅当前 day)
+function updateDayBar() {
+  const db = el("dayBar");
+  if (!db) return;
+  if (db.style.display === "none") return;
+  let rows = state.papers;
+  if (state.filterCat) rows = rows.filter(p => p.category_label === state.filterCat);
+  rows = rows.filter(p => paperMatches(p));
+  // 更新 dayBar 计数
+  const cntEl = el("dayBarMain") ? el("dayBarMain").querySelector(".cnt") : null;
+  if (cntEl) {
+    let suffix = "";
+    if (state.filterCat) suffix += "「" + state.filterCat + "」";
+    if (state.keyword.length) {
+      suffix += " 关键字「" + state.keyword.join("/") + "」";
+    }
+    cntEl.textContent = rows.length + " 篇" + (suffix ? " " + suffix : "");
+  }
+}
+
 function renderPapers() {
   const wrap = el("paperList");
   const empty = el("emptyState");
   let rows = state.filterCat
     ? state.papers.filter(p => p.category_label === state.filterCat)
     : state.papers;
+  // 关键字 AND 过滤(标题+摘要+类别+来源)
+  rows = rows.filter(p => paperMatches(p));
   if (rows.length === 0) {
     wrap.innerHTML = "";
     empty.style.display = "block";
-    empty.textContent = state.filterCat
-      ? `「${state.filterCat}」今天暂无数据`
-      : "暂无数据 · 点击右上角 刷新数据";
+    if (state.filterCat) {
+      const kws = state.keyword.length ? " 关键字「" + state.keyword.join("/") + "」" : "";
+      empty.textContent = `「${state.filterCat}」${kws} 今天暂无数据`;
+    } else if (state.keyword.length) {
+      empty.textContent = `关键字「${state.keyword.join("/")}」今天暂无匹配`;
+    } else {
+      empty.textContent = "暂无数据 · 点击右上角 刷新数据";
+    }
     return;
   }
   empty.style.display = "none";
@@ -155,19 +238,7 @@ function renderPapers() {
   rows.forEach(p => {
     const card = document.createElement("div");
     card.className = "paper";
-    card.innerHTML = `
-      <div class="p-top">
-        <div class="p-title">${esc(p.title)}</div>
-        <div class="p-meta">
-          <div class="cat">${esc(p.category_label)}</div>
-          <div class="date">${fmtDate(p.day)}</div>
-        </div>
-      </div>
-      <div class="p-sum">${esc(p.summary || "无摘要")}</div>
-      <a class="p-url" target="_blank" rel="noopener" href="${esc(p.url)}">
-        <span class="lbl">→ 打开原文</span> ${esc(trunc(p.url, 46))}
-      </a>
-    `;
+    card.innerHTML = `\n      <div class="p-top">\n        <div class="p-title">${esc(p.title)}</div>\n        <div class="p-meta">\n          <div class="cat">${esc(p.category_label)}</div>\n          <div class="date">${fmtDate(p.day)}</div>\n        </div>\n      </div>\n      <div class="p-sum">${esc(p.summary || "无摘要")}</div>\n      <a class="p-url" target="_blank" rel="noopener" href="${esc(p.url)}">\n        <span class="lbl">→ 打开原文</span> ${esc(trunc(p.url, 46))}\n      </a>\n    `;
     card.querySelector(".p-sum").onclick = e => {
       e.stopPropagation();
       const s = e.target;
@@ -175,6 +246,8 @@ function renderPapers() {
     };
     wrap.appendChild(card);
   });
+  // 更新 dayBar 计数, 与列表一致
+  updateDayBar();
 }
 
 // ---------- 数据加载 ----------
@@ -219,11 +292,16 @@ async function loadDay(day) {
   renderCatList();   // 计数按当天(state.papers)刷新, 切日期后类别不会缺
   renderPapers();
   el("dayBar").style.display = "flex";
-  el("dayBar").innerHTML = `
-    <span class="date">${fmtDate(day)}</span>
-    <span class="cnt">${state.papers.length} 篇</span>
-    <span class="time">按发表日期倒序</span>
-  `;
+  // 只更新 dayBarMain 内容, 保留右侧 kw-filter 输入框
+  const main = el("dayBarMain");
+  if (main) {
+    main.innerHTML = `
+      <span class="date">${fmtDate(day)}</span>
+      <span class="cnt"></span>
+      <span class="time">按发表日期倒序</span>
+    `;
+  }
+  updateDayBar();
 }
 
 async function refreshData() {
@@ -273,6 +351,15 @@ el("catTotalMode").addEventListener("change", () => {
   renderCatList();   // 立即刷新计数
   renderPapers();    // 类别列表变了, 论文筛选不变, 但重新渲染一次保持高亮一致
   toast(state.catTotalMode ? "计数已按全库总量" : "计数已按当天", "ok");
+});
+// dayBar 关键字: 回车添加; 输入框为空时按 Backspace 清空全部
+el("kwInput").addEventListener("keydown", e => {
+  if (e.key === "Enter") {
+    e.preventDefault();
+    addKeyword();
+  } else if (e.key === "Backspace" && (el("kwInput").value || "").trim() === "") {
+    clearKeywords();
+  }
 });
 // 自动刷新状态提示
 setInterval(() => {

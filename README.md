@@ -82,8 +82,37 @@ AI_DAILY_PORT=8787 python3 server.py
 | `AI_DAILY_HOST` | 127.0.0.1 | 监听地址 |
 | `AI_DAILY_MIN_DAYS` | 3 | 短窗口（focus）的天数 |
 | `AI_DAILY_DEFAULT_MODE` | backfill | 默认刷新模式（`backfill` 长窗口 / `focus` 短窗口） |
+| `AI_DAILY_LOG_LEVEL` | INFO | 日志级别（`DEBUG`/`INFO`/`WARNING`/`ERROR`/`CRITICAL`） |
+| `AI_DAILY_LOG_FILE` | （空） | 日志本地文件路径（默认只输出 console） |
+| `AI_DAILY_LOG_JSON` | 0 | 输出纯 JSON 行（机器解析；1/true/yes） |
 
 > `AI_DAILY_DEFAULT_MODE` 控制服务器默认刷新窗口（`?mode=` 可在浏览器端覆盖）。
+
+### 4. 日志
+关键业务节点（HTTP API、抓取、写库、初始化、关闭）都输出**结构化日志**，默认打印到 console；可另写本地文件：
+
+```bash
+# 仅 console（默认）
+python3 server.py
+
+# 追加写入本地文件
+python3 server.py --log-file logs/ai-daily.log
+
+# 或环境变量
+AI_DAILY_LOG_FILE=/var/log/ai-daily/app.log python3 server.py
+
+# 纯 JSON 行（便于机器解析/聚合）
+python3 server.py --log-json --log-file logs/ai-daily.json
+# 或 AI_DAILY_LOG_JSON=1
+
+# 更细粒度（源抓取明细）
+python3 server.py --log-level DEBUG
+```
+
+格式（文本）：`2026-10-27T03:37:14+0000 INFO  [ai-daily] 消息`。
+JSON 字段：`{ts, time, level, component, message}`。
+
+> 日志只记录业务与状态，**不记录**用户关键字、标题等敏感内容。
 
 ---
 
@@ -97,8 +126,13 @@ AI_DAILY_PORT=8787 python3 server.py
 - **服务器端**：`AI_DAILY_DEFAULT_MODE=focus` 设默认；或浏览器刷新时 POST `/api/refresh?mode=focus`。
 - **浏览器端**：页头右侧「短 / 长」按钮，刷新时按所选模式。
 
-### 类别筛选
-左侧列表可点击类别筛选当日论文；点"全部"恢复。
+### 关键字过滤（dayBar）
+日期条（`dayBar`）右侧的**文本输入框**可添加关键字：
+- **回车**添加一个关键字；已存在（大小写不敏感）不重复添加。
+- **多个关键字 = AND 逻辑**：一条论文必须**同时**被所有关键字匹配才显示。
+- 匹配范围：**标题 + 摘要 + 类别 + 来源**（小写比较）。
+- 已添加的关键字显示为可移除的 **label**；点 label 上的 `×` 或输入框为空时按 Backspace 清空全部。
+- 计数：`dayBar` 的"X 篇"和类别筛选同时生效时的计数，都按 (类别 + 关键字) 双重过滤后实时更新；无匹配时显示"今天暂无数据"。
 
 ### 类别计数逻辑（按总量 / 按当天）
 类别标题右侧的 **checkbox「按总量」** 控制计数方式，默认**按当天**：
@@ -176,9 +210,10 @@ curl -X POST "http://127.0.0.1:8787/api/refresh?mode=backfill"
        "url": "源 URL",
        # html 类型: HuggingFace 需抓详情页取正文
        # html_trending: GitHub Trending 式 HTML(无独立解析器, 用 fetch_github_trending)
-   }
+       # infoq: InfoQ 中文 RSS, 需抓文章页取真实摘要(用 fetch_infoq)
+       }
    ```
-3. 不同 `type` 用对应解析器（`_rss_fetch` / `fetch_techcrunch` / `_atom_fetch` / `fetch_huggingface` / `fetch_github_trending`）。
+3. 不同 `type` 用对应解析器（`_rss_fetch` / `fetch_techcrunch` / `_atom_fetch` / `fetch_huggingface` / `fetch_github_trending` / `fetch_infoq`）。
 4. 修改后重启 `server.py` 并点"刷新数据"验证。
 
 ### 窗口 / 天数调参

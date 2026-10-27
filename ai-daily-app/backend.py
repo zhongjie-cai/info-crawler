@@ -15,7 +15,7 @@
 from __future__ import annotations
 import os, re, sqlite3, xml.etree.ElementTree as ET
 import urllib.request, urllib.error, json
-import email.utils
+import email.utils, logging
 import html
 from datetime import datetime, timezone, timedelta
 
@@ -27,6 +27,9 @@ BACKFILL_DAYS = int(os.environ.get("AI_DAILY_BACKFILL_DAYS", "14"))  # 长窗口
 UA = {
     "User-Agent": "hermes-agent/1.0 (ai-daily-app; +https://github.com/NousResearch/hermes-agent)",
 }
+
+# ─── 日志 ───
+LOG = logging.getLogger("ai-daily")
 
 
 def _get_hf_abstract(url: str) -> str:
@@ -69,10 +72,12 @@ def _get_infoq_abstract(url: str) -> str:
             req = urllib.request.Request(url, headers=UA)
             with urllib.request.urlopen(req, timeout=30) as r:
                 data = r.read().decode("utf-8", "ignore")
-            break
-        except Exception:
+                break
+        except Exception as e:
+            LOG.debug("_get_infoq_abstract %s 异常: %s", url, e)
             continue
     if not data or "<html" not in data.lower():
+        LOG.debug("_get_infoq_abstract %s 无有效 HTML", url)
         return ""
     # 1) meta description
     m = re.search(r'meta name="description" content="(.*?)"\s*/??>', data, re.I)
@@ -90,7 +95,7 @@ def _get_infoq_abstract(url: str) -> str:
     m = re.search(r'(<p[^>]*>.*?</p>|<section[^>]*>.*?</section>)', data, re.I | re.S)
     if m:
         txt = re.sub(r'<[^>]+>', ' ', m.group(0))
-        txt = html.unescape(re.sub(r'\s+', ' ', txt).strip())
+        txt = html.unescape(re.sub(r"\s+", " ", txt).strip())
         if len(txt) > 30:
             return _short_summary(txt)
     return ""
@@ -267,8 +272,13 @@ def _fetch(url: str, timeout: int = 20) -> str:
     try:
         req = urllib.request.Request(url, headers=UA)
         with urllib.request.urlopen(req, timeout=timeout) as r:
-            return r.read().decode("utf-8", "ignore")
-    except Exception:
+            data = r.read().decode("utf-8", "ignore")
+            return data
+    except urllib.error.HTTPError as e:
+        LOG.debug("_fetch %s HTTP %s", url, e.code)
+        return ""
+    except Exception as e:
+        LOG.debug("_fetch %s 异常: %s", url, e)
         return ""
 
 
@@ -608,11 +618,14 @@ def fetch_all(min_days: int = 3, mode: str = "backfill", limit: int = 200) -> di
     """
     all_items = []
     errors = {}
+    LOG.info("fetch_all 开始 mode=%s min_days=%s 源=%s arXiv类别=%s",
+             mode, min_days, len(NON_ARXIV_SOURCES), len(ARXIV_CATEGORIES))
     # arXiv
     for cat in ARXIV_CATEGORIES:
         res = fetch_arxiv(cat, limit=limit)
         errors[cat] = len(res)
         all_items.extend(res)
+        LOG.debug("arXiv %s 返回 %s 条", cat, len(res))
     # 非 arXiv
     for label, cfg in NON_ARXIV_SOURCES.items():
         t = cfg["type"]
@@ -632,13 +645,20 @@ def fetch_all(min_days: int = 3, mode: str = "backfill", limit: int = 200) -> di
             res = []
         errors[label] = len(res)
         all_items.extend(res)
+        if res:
+            LOG.debug("源 %s(%s) 返回 %s 条", label, t, len(res))
+        else:
+            LOG.info("源 %s(%s) 返回 0 条(空/失败, 跳过)", label, t)
 
     # 跨源去重: 按 unique_id (url) 去重, 保持顺序
     seen = set()
+    dedup_before = len(all_items)
     all_items = [x for x in all_items
                  if (x["unique_id"] not in seen and not (seen.add(x["unique_id"])))]
+    LOG.info("fetch_all 去重前 %s 去重后 %s 条", dedup_before, len(all_items))
 
     if not all_items:
+        LOG.info("fetch_all 无数据(各源空), 返回空")
         return {}, {k: v for k, v in errors.items()}
 
     # 窗口: 长窗口默认, 短窗口可切
@@ -646,6 +666,7 @@ def fetch_all(min_days: int = 3, mode: str = "backfill", limit: int = 200) -> di
     now = datetime.now(timezone.utc)
     cutoff = now - timedelta(days=window)
     cutoff_date = cutoff.strftime("%Y-%m-%d")
+    LOG.info("fetch_all 窗口 mode=%s window=%s 天 cutoff=%s", mode, window, cutoff_date)
 
     by_day = {}
     for it in all_items:
@@ -654,6 +675,8 @@ def fetch_all(min_days: int = 3, mode: str = "backfill", limit: int = 200) -> di
         by_day.setdefault(it["day"], []).append(it)
     for day in by_day:
         by_day[day].sort(key=lambda x: x.get("pubDate", ""), reverse=True)
+    LOG.info("fetch_all 完成 按 day 共 %s 天 合计 %s 条",
+             len(by_day), sum(len(v) for v in by_day.values()))
     return by_day, {k: v for k, v in errors.items()}
 
 
@@ -691,6 +714,7 @@ def init_db() -> None:
 
 def save_day(day: str, papers: list[dict]) -> int:
     """将某一天的 papers 写入数据库, 同一天覆盖更新(先删该 day 再插)。"""
+    LOG.info("save_day %s 开始 共 %s 条", day, len(papers))
     conn = sqlite3.connect(DB_PATH)
     try:
         conn.execute("DELETE FROM papers WHERE day = ?", (day,))
@@ -707,7 +731,11 @@ def save_day(day: str, papers: list[dict]) -> int:
                   p.get("source", "arXiv")))
             count += 1
         conn.commit()
+        LOG.info("save_day %s 完成 写入 %s 条", day, count)
         return count
+    except Exception as e:
+        LOG.exception("save_day %s 异常: %s", day, e)
+        raise
     finally:
         conn.close()
 
